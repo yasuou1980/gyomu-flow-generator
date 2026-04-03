@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3階層 業務フロー図 ジェネレーター (Ultimate Edition)</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin="anonymous">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet" crossorigin="anonymous">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@0.344.0"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+<script>
+tailwind.config = {
+    theme: { extend: { fontFamily: { sans: ['"Noto Sans JP"', 'sans-serif'] }, colors: { slate: { 50: '#f8fafc', 100: '#f1f5f9', 200: '#e2e8f0', 300: '#cbd5e1', 400: '#94a3b8', 500: '#64748b', 600: '#475569', 700: '#334155', 800: '#1e293b', 900: '#0f172a' } } } }
+}
+</script>
+
+<style>
+:root { --page-w: 1123px; --page-h: 794px; --app-bg: #f8fafc; --preview-bg: #e2e8f0; }
+body { margin: 0; font-family: 'Noto Sans JP', sans-serif; background-color: var(--app-bg); -webkit-font-smoothing: antialiased; }
+.preview-wrapper { display: grid; place-items: start center; padding: 20px 0; gap: 20px; min-height: 100%; }
+.capture-area-container { background: transparent; position: relative; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1); }
+.pdf-page { width: var(--page-w); height: var(--page-h); background-color: white; position: relative; overflow: hidden; transform-origin: top left; display: flex; flex-direction: column; contain: layout paint style; }
+.page-inner { width: 100%; padding: 50px; display: flex; flex-direction: column; box-sizing: border-box; }
+.floating-zoom { position: absolute; bottom: 16px; left: 16px; background: white; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); display: flex; align-items: center; padding: 4px; opacity: 0.4; transition: opacity 0.2s; z-index: 40; }
+.floating-zoom:hover { opacity: 1; }
+.floating-zoom button { padding: 8px; border-radius: 4px; background: transparent; border: none; cursor: pointer; color: #334155; }
+.floating-zoom button:hover { background: #f1f5f9; }
+.floating-zoom span { padding: 0 12px; font-size: 14px; font-weight: bold; color: #334155; }
+#pdf-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(100,116,139,0.75); z-index: 9999; display: none; flex-direction: column; justify-content: center; align-items: center; color: white; }
+#pdf-overlay.active { display: flex; }
+.pdf-spinner { border: 4px solid rgba(255,255,255,0.3); border-top: 4px solid white; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 16px; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+input:focus, textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px #bfdbfe; }
+#resize-handle { width: 6px; background-color: #cbd5e1; cursor: col-resize; transition: background-color 0.2s; z-index: 10; }
+#resize-handle:hover, #resize-handle:active { background-color: #94a3b8; }
+.flow-node { transition: all 0.2s; }
+.flow-node:hover { filter: brightness(0.95); }
+.interactive-toggle { cursor: pointer; user-select: none; }
+.drag-handle { cursor: grab; touch-action: none; }
+.drag-handle:active { cursor: grabbing; }
+.flow-drag-item { transition: opacity 0.15s ease; }
+.flow-drag-item.opacity-50 { opacity: 0.5; }
+.drop-above::before { content: ''; position: absolute; top: -3px; left: 0; right: 0; height: 3px; background-color: #3b82f6; z-index: 50; border-radius: 2px; pointer-events: none; }
+.drop-below::after { content: ''; position: absolute; bottom: -3px; left: 0; right: 0; height: 3px; background-color: #3b82f6; z-index: 50; border-radius: 2px; pointer-events: none; }
+.node-text-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; word-break: break-all; line-height: 1.4; }
+.file-drop-zone { border: 2px dashed #cbd5e1; transition: all 0.2s; }
+.file-drop-zone.dragover { border-color: #3b82f6; background-color: #eff6ff; }
+@keyframes flashHighlight { 0%, 100% { box-shadow: 0 0 0 transparent; border-color: inherit; } 30%, 70% { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.4); border-color: #3b82f6; background-color: #eff6ff; } }
+.highlight-target { animation: flashHighlight 2s ease-in-out; }
+
+/* プレビュー用ツールチップ */
+#manual-tooltip {
+    position: fixed;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease-in-out, visibility 0.2s;
+    pointer-events: none;
+    z-index: 100;
+}
+#manual-tooltip.visible {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+}
+
+/* ツールチップ内のカルーセル */
+.carousel-track { transition: transform 0.3s ease-in-out; }
+.carousel-slide { width: 360px; flex-shrink: 0; }
+
+/* 画像拡大ビューア */
+#image-viewer {
+    backdrop-filter: blur(4px);
+}
+</style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+<div id="main-shell" class="flex flex-row flex-1 overflow-hidden relative">
+    <div id="left-pane" class="w-[380px] bg-white flex flex-col border-r border-slate-200 shrink-0 relative z-20">
+        <div class="p-4 border-b border-slate-200 flex flex-col gap-2 bg-slate-50 relative shrink-0">
+            <button id="btn-open-newtab" class="absolute top-2 right-2 p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded transition-colors" title="別タブで開く"><i data-lucide="external-link" class="w-4 h-4"></i></button>
+            
+            <div class="grid grid-cols-2 gap-2 w-full mt-4">
+                <button id="btn-import-md" class="bg-white border border-slate-300 text-slate-700 py-1.5 rounded text-[13px] font-bold hover:bg-slate-50 flex justify-center items-center gap-1.5"><i data-lucide="file-text" class="w-3.5 h-3.5"></i> MD読込</button>
+                <button id="btn-export-md" class="bg-white border border-slate-300 text-slate-700 py-1.5 rounded text-[13px] font-bold hover:bg-slate-50 flex justify-center items-center gap-1.5"><i data-lucide="file-text" class="w-3.5 h-3.5"></i> MD書出</button>
+                <button id="btn-import-zip" class="bg-white border border-indigo-300 text-indigo-700 py-1.5 rounded text-[13px] font-bold hover:bg-indigo-50 flex justify-center items-center gap-1.5"><i data-lucide="folder-input" class="w-3.5 h-3.5"></i> ZIP読込</button>
+                <button id="btn-export-zip" class="bg-indigo-600 border border-indigo-600 text-white py-1.5 rounded text-[13px] font-bold hover:bg-indigo-700 flex justify-center items-center gap-1.5"><i data-lucide="folder-output" class="w-3.5 h-3.5"></i> ZIP書出</button>
+            </div>
+            
+            <button id="btn-save-pdf" class="w-full bg-slate-800 text-white py-2 rounded text-sm font-bold hover:bg-slate-700 flex justify-center items-center gap-2 transition-colors mt-1"><i data-lucide="download" class="w-4 h-4"></i> PDF出力</button>
+            <div class="flex justify-between items-center mt-1 text-[10px]">
+                <span id="storage-status" class="text-slate-500 font-bold flex items-center gap-1"><i data-lucide="database" class="w-3 h-3"></i> ストレージ準備中...</span>
+            </div>
+            <input type="file" id="md-upload-input" accept=".md,.txt" class="hidden">
+            <input type="file" id="zip-upload-input" accept=".zip" class="hidden">
+        </div>
+        <div class="flex-1 overflow-y-auto p-4" id="form-container"></div>
+    </div>
+    <div id="resize-handle"></div>
+    <div id="right-pane" class="flex-1 flex flex-col overflow-hidden bg-slate-200 relative z-10">
+        <div id="preview-container" class="flex-1 overflow-auto relative p-8">
+            <div id="pdf-overlay"><div class="pdf-spinner"></div><div class="font-bold tracking-widest mb-2" id="overlay-text">処理中...</div><div id="pdf-progress" class="text-sm opacity-90"></div></div>
+            <div class="preview-wrapper" id="preview-wrapper"></div>
+        </div>
+        <div class="floating-zoom"><button id="btn-zoom-out"><i data-lucide="minus" class="w-4 h-4"></i></button><span id="zoom-level">100%</span><button id="btn-zoom-in"><i data-lucide="plus" class="w-4 h-4"></i></button></div>
+    </div>
+</div>
+
+<div id="manual-panel" class="fixed right-0 top-0 w-[460px] max-w-full h-full bg-white shadow-[0_0_40px_rgba(0,0,0,0.2)] transform translate-x-full transition-transform duration-300 z-40 flex flex-col border-l border-slate-300">
+    <div class="p-4 border-b bg-slate-800 text-white flex justify-between items-center shrink-0">
+        <div class="font-bold flex items-center gap-2"><i data-lucide="book-open" class="w-4 h-4 text-blue-300"></i> <span id="manual-panel-title">マニュアル詳細編集</span></div>
+        <button id="btn-close-manual" class="text-slate-300 hover:text-white transition-colors p-1"><i data-lucide="x" class="w-5 h-5"></i></button>
+    </div>
+    <div class="p-4 overflow-y-auto flex-1 space-y-5 bg-slate-50" id="manual-panel-body"></div>
+</div>
+
+<div id="link-modal" class="fixed inset-0 bg-slate-900/60 hidden z-50 flex items-center justify-center opacity-0 transition-opacity duration-200">
+    <div class="bg-white rounded-lg shadow-xl w-[500px] max-w-[90%] max-h-[80vh] flex flex-col transform scale-95 transition-transform duration-200" id="link-modal-content">
+        <div class="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-lg">
+            <h3 class="font-bold text-slate-800 flex items-center gap-2"><i data-lucide="link" class="w-4 h-4 text-blue-600"></i> 関連フローを選択</h3>
+            <button id="btn-close-link-modal" class="text-slate-400 hover:text-slate-600"><i data-lucide="x" class="w-5 h-5"></i></button>
+        </div>
+        <div class="p-3 border-b border-slate-200 bg-white">
+            <div class="relative"><i data-lucide="search" class="w-4 h-4 absolute left-3 top-2.5 text-slate-400"></i><input type="text" id="link-search" placeholder="フロー名で検索..." class="w-full border border-slate-300 rounded pl-9 pr-3 py-2 text-sm focus:border-blue-500 outline-none"></div>
+        </div>
+        <div id="link-tree-container" class="p-4 overflow-y-auto flex-1 space-y-1 bg-white"></div>
+    </div>
+</div>
+
+<div id="manual-tooltip" class="fixed bg-white border border-slate-300 rounded-xl shadow-2xl w-[360px] max-h-[460px] flex flex-col overflow-hidden"></div>
+
+<div id="image-viewer" class="fixed inset-0 bg-black/80 hidden z-[60] flex items-center justify-center transition-opacity duration-200 opacity-0 p-6">
+    <div class="absolute top-4 left-4 z-10 flex items-center gap-2">
+        <button id="btn-viewer-prev-step" class="text-white bg-white/20 hover:bg-white/40 disabled:opacity-30 disabled:cursor-not-allowed p-2 rounded-full transition-colors" title="前のステップ">
+            <i data-lucide="chevron-left" class="w-6 h-6"></i>
+        </button>
+        <div id="viewer-step-position" class="text-white bg-black/30 px-3 py-1 rounded-full text-xs font-bold tracking-wide">1 / 1</div>
+        <button id="btn-viewer-next-step" class="text-white bg-white/20 hover:bg-white/40 disabled:opacity-30 disabled:cursor-not-allowed p-2 rounded-full transition-colors" title="次のステップ">
+            <i data-lucide="chevron-right" class="w-6 h-6"></i>
+        </button>
+    </div>
+
+    <div class="absolute top-4 right-4 z-10 flex gap-4">
+        <a id="viewer-download" href="#" download class="text-white bg-white/20 hover:bg-white/40 p-2 rounded-full transition-colors" title="ダウンロード"><i data-lucide="download" class="w-6 h-6"></i></a>
+        <button id="btn-close-viewer" class="text-white bg-white/20 hover:bg-white/40 p-2 rounded-full transition-colors" title="閉じる"><i data-lucide="x" class="w-6 h-6"></i></button>
+    </div>
+
+    <div class="w-[min(1200px,95vw)] h-[min(90vh,820px)] bg-white rounded-2xl overflow-hidden shadow-2xl flex flex-col md:flex-row">
+        <div class="flex-1 bg-slate-900 flex items-center justify-center relative min-w-0">
+            <img id="viewer-img" class="max-w-full max-h-full object-contain hidden">
+            <div id="viewer-loading" class="absolute text-white flex flex-col items-center gap-2 hidden">
+                <div class="pdf-spinner"></div>
+                <span class="text-sm font-bold tracking-widest">読み込み中...</span>
+            </div>
+        </div>
+
+        <div class="w-full md:w-[360px] md:max-w-[40%] bg-slate-50 border-t md:border-t-0 md:border-l border-slate-200 flex flex-col h-1/3 md:h-auto">
+            <div class="px-5 py-4 border-b border-slate-200 bg-white">
+                <div id="viewer-step-no" class="text-[11px] font-bold text-blue-600 mb-1">Step -</div>
+                <div id="viewer-step-title" class="text-lg font-bold text-slate-800 leading-snug">タイトル未設定</div>
+            </div>
+            <div class="p-5 overflow-y-auto flex-1">
+                <div class="text-[11px] font-bold text-slate-500 mb-2">作業内容</div>
+                <div id="viewer-step-description" class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">説明はありません</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    /* INJECTED_DATA_START */
+    const EMBEDDED_DATA = null;
+    /* INJECTED_DATA_END */
+
+    const genId = (prefix) => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,6)}`;
+
+    function showLoading(text) { const overlay = document.getElementById('pdf-overlay'); document.getElementById('overlay-text').textContent = text; overlay.classList.add('active'); }
+    function hideLoading() { document.getElementById('pdf-overlay').classList.remove('active'); document.getElementById('pdf-progress').textContent = ''; }
+
+    const DB_NAME = 'FlowManualDB'; const DB_VERSION = 1;
+    const StorageManager = {
+        db: null, isMemoryMode: false, memoryAttachments: {},
+        async init() {
+            try {
+                return await new Promise((resolve, reject) => {
+                    const request = indexedDB.open(DB_NAME, DB_VERSION);
+                    request.onupgradeneeded = (e) => {
+                        const db = e.target.result;
+                        if (!db.objectStoreNames.contains('projects')) db.createObjectStore('projects', { keyPath: 'projectId' });
+                        if (!db.objectStoreNames.contains('attachments')) { const attStore = db.createObjectStore('attachments', { keyPath: 'id' }); attStore.createIndex('byProject', 'projectId', { unique: false }); }
+                    };
+                    request.onsuccess = (e) => { this.db = e.target.result; resolve(); }; request.onerror = (e) => reject(e);
+                });
+            } catch (error) { this.isMemoryMode = true; }
+        },
+        async saveProject(projectId, stateData) {
+            if (this.isMemoryMode || !this.db) return;
+            return new Promise((resolve, reject) => { const tx = this.db.transaction('projects', 'readwrite'); tx.objectStore('projects').put({ projectId, data: stateData, updatedAt: new Date().getTime() }); tx.oncomplete = () => resolve(); tx.onerror = (e) => reject(e); });
+        },
+        async getLatestProject() {
+            if (this.isMemoryMode || !this.db) return null;
+            return new Promise((resolve, reject) => { const tx = this.db.transaction('projects', 'readonly'); const req = tx.objectStore('projects').getAll(); req.onsuccess = () => { const projects = req.result; if (projects.length === 0) resolve(null); else { projects.sort((a, b) => b.updatedAt - a.updatedAt); resolve(projects[0].data); } }; req.onerror = (e) => reject(e); });
+        },
+        async saveAttachment(attInfo, fileBlob) {
+            if (this.isMemoryMode) {
+                this.memoryAttachments[attInfo.id] = { ...attInfo, blob: fileBlob };
+                return;
+            }
+            if (!this.db) return;
+            return new Promise((resolve, reject) => { const tx = this.db.transaction('attachments', 'readwrite'); tx.objectStore('attachments').put({ ...attInfo, blob: fileBlob }); tx.oncomplete = () => resolve(); tx.onerror = (e) => reject(e); });
+        },
+        async deleteAttachment(id) {
+            if (this.isMemoryMode) { delete this.memoryAttachments[id]; return; }
+            if (!this.db) return;
+            return new Promise((resolve, reject) => { const tx = this.db.transaction('attachments', 'readwrite'); tx.objectStore('attachments').delete(id); tx.oncomplete = () => resolve(); tx.onerror = (e) => reject(e); });
+        },
+        async getAttachmentsByProject(projectId) {
+            if (this.isMemoryMode) { return Object.values(this.memoryAttachments).filter(att => att.projectId === projectId); }
+            if (!this.db) return [];
+            return new Promise((resolve, reject) => { const tx = this.db.transaction('attachments', 'readonly'); const index = tx.objectStore('attachments').index('byProject'); const req = index.getAll(projectId); req.onsuccess = () => resolve(req.result); req.onerror = (e) => reject(e); });
+        },
+        async getAttachmentBlob(id) {
+            if (this.isMemoryMode) {
+                const att = this.memoryAttachments[id];
+                return att ? att.blob : null;
+            }
+            if (!this.db) return null;
+            return new Promise((resolve, reject) => {
+                const tx = this.db.transaction('attachments', 'readonly');
+                const req = tx.objectStore('attachments').get(id);
+                req.onsuccess = () => resolve(req.result ? req.result.blob : null);
+                req.onerror = (e) => reject(e);
+            });
+        }
+    };
+
+    const defaultV1State = { title: "新規事業 展開フロー", date: new Date().toLocaleDateString('ja-JP'), author: "山田 太郎", flows: [{ name: "フェーズ1", isOpen: true, isBottleneck: false, children: [{ name: "ステップ1", isOpen: true, isBottleneck: false, children: [{ name: "詳細手順", isBottleneck: false }] }] }] };
+    function migrateV1toV2(v1State) {
+        if (v1State.meta && v1State.meta.version === "2.0.0") return v1State;
+        return {
+            meta: { version: "2.0.0", projectId: `proj_${Date.now().toString(36)}`, title: v1State.title || "無題", date: v1State.date || new Date().toLocaleDateString('ja-JP'), author: v1State.author || "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+            flows: v1State.flows.map(l => ({ ...l, id: genId('L'), children: l.children.map(m => ({ ...m, id: genId('M'), children: m.children.map(s => ({ ...s, id: genId('S'), linkedFlowId: null, manual: { summary: "", steps: [], notes: "", linkedFlows: [] } })) })) }))
+        };
+    }
+
+    let state = null; let currentScale = 1.0; let currentManualPath = null;
+    let history = []; let historyIndex = -1; const MAX_HISTORY = 50;
+    const PAGE_SIZES = { w: 1123, h: 794, mmW: 297, mmH: 210 };
+    let previewNodeMap = new Map();
+
+    function serializeForHistory(obj) { return JSON.stringify(obj, (key, value) => (key === 'thumbnail' || key === 'blob') ? undefined : value); }
+    
+    let _saveTimer;
+    function debouncedSaveOnly() { 
+        clearTimeout(_saveTimer); 
+        _saveTimer = setTimeout(() => { StorageManager.saveProject(state.meta.projectId, state).catch(e => console.warn(e)); }, 500); 
+    }
+
+    function pushHistory() {
+        if (!state) return; 
+        const currentStateStr = serializeForHistory(state); 
+        if (historyIndex >= 0 && history[historyIndex] === currentStateStr) return;
+        history = history.slice(0, historyIndex + 1); 
+        history.push(currentStateStr); 
+        if (history.length > MAX_HISTORY) history.shift();
+        historyIndex = history.length - 1; 
+        const u = document.getElementById('btn-undo'), r = document.getElementById('btn-redo'); 
+        if(u) u.disabled = historyIndex <= 0; 
+        if(r) r.disabled = historyIndex >= history.length - 1;
+    }
+
+    function markDirty() { 
+        pushHistory();
+        debouncedSaveOnly(); 
+    } 
+
+    function undo() { 
+        if (historyIndex <= 0) return; 
+        historyIndex--; 
+        state = JSON.parse(history[historyIndex]); 
+        renderFull(); 
+        debouncedSaveOnly();
+    }
+    
+    function redo() { 
+        if (historyIndex >= history.length - 1) return; 
+        historyIndex++; 
+        state = JSON.parse(history[historyIndex]); 
+        renderFull(); 
+        debouncedSaveOnly(); 
+    }
+
+    const escapeHTML = (v) => (v == null ? '' : String(v)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    function getTimestamp() { const now = new Date(); const pad = (n) => String(n).padStart(2, '0'); return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`; }
+    function getSafeFilename(t, ts) { return (t.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '_').slice(0, 60) || 'flow') + '_' + ts; }
+    
+    function getFlowByPath(path) {
+        if (!path) return null;
+        const parts = path.split('-').map(Number);
+        let node = null;
+        let list = state.flows;
+        for (const idx of parts) {
+            if (!Array.isArray(list) || idx < 0 || idx >= list.length) return null;
+            node = list[idx];
+            list = node.children;
+        }
+        return node;
+    }
+
+    function findFlowById(id) { for (let l of state.flows) { if (l.id === id) return { type: 'L', flow: l }; for (let m of l.children) { if (m.id === id) return { type: 'M', flow: m, parentL: l }; for (let s of m.children) { if (s.id === id) return { type: 'S', flow: s, parentM: m, parentL: l }; } } } return null; }
+    function checkIsLinked(targetId) { let isLinked = false; state.flows.forEach(l => l.children.forEach(m => m.children.forEach(s => { if (s.manual && s.manual.linkedFlows && s.manual.linkedFlows.includes(targetId)) isLinked = true; }))); return isLinked; }
+    
+    function generateThumbnail(file) {
+        return new Promise((resolve, reject) => {
+            if (!file || !file.type.startsWith('image/')) {
+                resolve(null);
+                return;
+            }
+            const reader = new FileReader();
+            reader.onerror = () => reject(new Error('FileReader error'));
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onerror = () => reject(new Error('Image load error'));
+                img.onload = () => {
+                    try {
+                        const canvas = document.createElement('canvas');
+                        const scale = Math.min(200 / img.width, 1);
+                        canvas.width = img.width * scale;
+                        canvas.height = img.height * scale;
+                        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+                        resolve(canvas.toDataURL('image/jpeg', 0.8));
+                    } catch (err) {
+                        reject(err);
+                    }
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }).catch(err => {
+            console.warn('[Thumbnail Error]', err);
+            return null;
+        });
+    }
+
+    // --- MD Parser Logic ---
+    function createEmptyImportedState() { return { meta: { version: "2.0.0", projectId: `proj_${Date.now().toString(36)}`, title: "無題", date: new Date().toLocaleDateString('ja-JP'), author: "", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, flows: [] }; }
+    function createLargeFlow(name, isBottleneck = false) { return { id: genId('L'), name: name || "大フロー", isOpen: true, isBottleneck, children: [] }; }
+    function createMiddleFlow(name, isBottleneck = false) { return { id: genId('M'), name: name || "中フロー", isOpen: true, isBottleneck, children: [] }; }
+    function createSmallFlow(name, isBottleneck = false) { return { id: genId('S'), name: name || "小フロー", isBottleneck, linkedFlowId: null, manual: { summary: "", steps: [], notes: "", linkedFlows: [] } }; }
+    function createManualStep(order, title = "") { return { id: genId('step'), order, title, description: "", attachments: [] }; }
+    function normalizeMultilineText(text) { return text ? text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n{3,}/g, '\n\n').trim() : ""; }
+    function appendMultilineField(target, fieldName, value) { if (!target || !fieldName || !value) return; if (!target[fieldName]) target[fieldName] = value; else target[fieldName] += '\n' + value; }
+    function stripBottleneckSuffix(text) { const isBottleneck = /\s*\[ボトルネック\]\s*$/.test(text); const clean = text.replace(/\s*\[ボトルネック\]\s*$/, '').trim(); return { clean, isBottleneck }; }
+    function extractLinkedFlowId(text) { let m = text.match(/^🔗\s*->\s*\[[^\]]+\]\(([^)]+)\)\s*$/); if (m) return m[1].trim(); m = text.match(/^🔗\s*->\s*([A-Za-z0-9_\-:\.]+)\s*$/); if (m) return m[1].trim(); return null; }
+    function ensureLargeFlow(newState, currentLargeFlowRef) { if (currentLargeFlowRef.value) return currentLargeFlowRef.value; currentLargeFlowRef.value = createLargeFlow("大フロー", false); newState.flows.push(currentLargeFlowRef.value); return currentLargeFlowRef.value; }
+    function ensureMiddleFlow(newState, currentLargeFlowRef, currentMiddleFlowRef) { if (currentMiddleFlowRef.value) return currentMiddleFlowRef.value; const l = ensureLargeFlow(newState, currentLargeFlowRef); currentMiddleFlowRef.value = createMiddleFlow("中フロー", false); l.children.push(currentMiddleFlowRef.value); return currentMiddleFlowRef.value; }
+
+    function finalizeImportedState(newState) {
+        newState.meta.title = normalizeMultilineText(newState.meta.title || "無題") || "無題"; newState.meta.date = normalizeMultilineText(newState.meta.date || new Date().toLocaleDateString('ja-JP')); newState.meta.author = normalizeMultilineText(newState.meta.author || "");
+        newState.flows.forEach(l => {
+            l.name = normalizeMultilineText(l.name || "大フロー") || "大フロー"; l.children = l.children || [];
+            l.children.forEach(m => {
+                m.name = normalizeMultilineText(m.name || "中フロー") || "中フロー"; m.children = m.children || [];
+                m.children.forEach((s, sIndex) => {
+                    s.name = normalizeMultilineText(s.name || `小フロー${sIndex + 1}`) || `小フロー${sIndex + 1}`;
+                    if (!s.manual) s.manual = { summary: "", steps: [], notes: "", linkedFlows: [] };
+                    s.manual.summary = normalizeMultilineText(s.manual.summary); s.manual.notes = normalizeMultilineText(s.manual.notes);
+                    if (!Array.isArray(s.manual.linkedFlows)) s.manual.linkedFlows = []; s.manual.linkedFlows = [...new Set(s.manual.linkedFlows.filter(Boolean))];
+                    if (!Array.isArray(s.manual.steps)) s.manual.steps = [];
+                    s.manual.steps = s.manual.steps.map((step, idx) => ({ id: step.id || genId('step'), order: idx + 1, title: normalizeMultilineText(step.title || `Step ${idx + 1}`) || `Step ${idx + 1}`, description: normalizeMultilineText(step.description || ""), attachments: Array.isArray(step.attachments) ? step.attachments : [] }));
+                });
+            });
+        });
+        return newState;
+    }
+
+    function parseRichMarkdownToState(markdownText) {
+        const lines = String(markdownText || "").replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+        const newState = createEmptyImportedState(); const currentLargeFlowRef = { value: null }; const currentMiddleFlowRef = { value: null };
+        let currentSmallFlow = null; let currentStep = null; let sectionMode = 'none'; const warnings = []; const unresolvedLinkIds = [];
+        function resetManualContext() { currentSmallFlow = null; currentStep = null; sectionMode = 'none'; }
+        function pushWarning(lineNo, message, raw) { warnings.push({ line: lineNo, message, text: raw }); }
+
+        lines.forEach((rawLine, index) => {
+            const lineNo = index + 1; const text = rawLine.trim(); if (!text) return;
+            const { clean, isBottleneck } = stripBottleneckSuffix(text);
+
+            if (clean.startsWith('# ')) { newState.meta.title = clean.substring(2).trim() || "無題"; currentLargeFlowRef.value = null; currentMiddleFlowRef.value = null; resetManualContext(); return; }
+            if (clean.startsWith('date:')) { newState.meta.date = clean.substring(5).trim(); return; }
+            if (clean.startsWith('author:')) { newState.meta.author = clean.substring(7).trim(); return; }
+            if (clean.startsWith('## ')) { const l = createLargeFlow(clean.substring(3).trim(), isBottleneck); newState.flows.push(l); currentLargeFlowRef.value = l; currentMiddleFlowRef.value = null; resetManualContext(); return; }
+            if (clean.startsWith('### ')) { const parentL = ensureLargeFlow(newState, currentLargeFlowRef); const m = createMiddleFlow(clean.substring(4).trim(), isBottleneck); parentL.children.push(m); currentMiddleFlowRef.value = m; resetManualContext(); return; }
+            if (clean.startsWith('- ') || clean.startsWith('* ')) { const parentM = ensureMiddleFlow(newState, currentLargeFlowRef, currentMiddleFlowRef); const s = createSmallFlow(clean.substring(2).trim(), isBottleneck); parentM.children.push(s); currentSmallFlow = s; currentStep = null; sectionMode = 'none'; return; }
+
+            if (!currentSmallFlow) { pushWarning(lineNo, '小フロー外のため解釈できない行を無視しました', rawLine); return; }
+
+            if (clean.startsWith('> ')) { appendMultilineField(currentSmallFlow.manual, 'summary', clean.substring(2).trim()); currentStep = null; sectionMode = 'summary'; return; }
+            if (/^\d+\.\s+/.test(clean)) { const title = clean.replace(/^\d+\.\s+/, '').trim(); const step = createManualStep(currentSmallFlow.manual.steps.length + 1, title); currentSmallFlow.manual.steps.push(step); currentStep = step; sectionMode = 'steps'; return; }
+            if (clean === '---') { currentStep = null; sectionMode = 'notes-links'; return; }
+            if (clean.startsWith('備考:')) { appendMultilineField(currentSmallFlow.manual, 'notes', clean.substring(3).trim()); currentStep = null; sectionMode = 'notes-continuation'; return; }
+            if (clean.startsWith('🔗')) { const linkId = extractLinkedFlowId(clean); if (linkId) { currentSmallFlow.manual.linkedFlows.push(linkId); unresolvedLinkIds.push(linkId); } else pushWarning(lineNo, '関連リンクの書式を解釈できませんでした', rawLine); currentStep = null; sectionMode = 'notes-links'; return; }
+
+            if (currentStep) { appendMultilineField(currentStep, 'description', clean); return; }
+            if (sectionMode === 'notes-continuation' && currentSmallFlow.manual.notes) { appendMultilineField(currentSmallFlow.manual, 'notes', clean); return; }
+            if (sectionMode === 'summary' && currentSmallFlow.manual.summary) { appendMultilineField(currentSmallFlow.manual, 'summary', clean); return; }
+            pushWarning(lineNo, '文脈に紐づけられない行を無視しました', rawLine);
+        });
+
+        const finalizedState = finalizeImportedState(newState); const allIds = new Set();
+        finalizedState.flows.forEach(l => { allIds.add(l.id); l.children.forEach(m => { allIds.add(m.id); m.children.forEach(s => allIds.add(s.id)); }); });
+        const unresolvedAfterParse = [];
+        finalizedState.flows.forEach(l => l.children.forEach(m => m.children.forEach(s => { s.manual.linkedFlows.forEach(id => { if (!allIds.has(id)) unresolvedAfterParse.push({ sourceFlowName: s.name, targetId: id }); }); })));
+
+        return { state: finalizedState, warnings, unresolvedLinks: unresolvedAfterParse };
+    }
+
+    async function init() {
+        await StorageManager.init();
+        const statusEl = document.getElementById('storage-status');
+        if (StorageManager.isMemoryMode) { statusEl.innerHTML = `<i data-lucide="alert-triangle" class="w-3 h-3 text-amber-500"></i> 一時メモリモード（保存されません）`; statusEl.classList.add('text-amber-600'); } 
+        else { statusEl.innerHTML = `<i data-lucide="database" class="w-3 h-3"></i> ローカル自動保存有効`; }
+
+        if (EMBEDDED_DATA) state = migrateV1toV2(EMBEDDED_DATA);
+        else { const latest = await StorageManager.getLatestProject(); state = latest ? latest : migrateV1toV2(defaultV1State); }
+
+        pushHistory(); 
+        setupDelegatedEvents(); 
+        setupDragAndDrop(); 
+        setupLinkModal(); 
+        setupGlobalEventListeners(); 
+        setupTooltipAndViewer();
+        setupResizeHandle();
+        renderFull(); 
+        
+        window.addEventListener('resize', () => { adjustZoom(0); autoAdjustDensity(); hideManualTooltip(); });
+        if (document.fonts && document.fonts.ready) { await document.fonts.ready; autoAdjustDensity(); }
+    }
+
+    function setupDragAndDrop() {
+        const formContainer = document.getElementById('form-container');
+        let draggedPath = null, draggedType = null, draggedParent = null;
+
+        formContainer.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.drag-handle')) {
+                const item = e.target.closest('.flow-drag-item');
+                if (item) item.setAttribute('draggable', 'true');
+            }
+        });
+
+        formContainer.addEventListener('dragstart', (e) => {
+            const item = e.target.closest('.flow-drag-item');
+            if (!item || !item.hasAttribute('draggable')) { e.preventDefault(); return; }
+            draggedPath = item.dataset.dragPath; draggedType = item.dataset.dragType; draggedParent = draggedPath.split('-').slice(0, -1).join('-');
+            e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', draggedPath);
+            setTimeout(() => item.classList.add('opacity-50'), 0); e.stopPropagation();
+        });
+
+        formContainer.addEventListener('dragend', (e) => {
+            const item = e.target.closest('.flow-drag-item'); if (item) { item.classList.remove('opacity-50'); item.removeAttribute('draggable'); }
+            formContainer.querySelectorAll('.drop-above, .drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
+            draggedPath = null; draggedType = null; draggedParent = null;
+        });
+
+        formContainer.addEventListener('dragover', (e) => {
+            e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+            const targetItem = e.target.closest('.flow-drag-item'); if (!targetItem || !draggedPath) return;
+            if (draggedType !== targetItem.dataset.dragType || draggedParent !== targetItem.dataset.dragPath.split('-').slice(0, -1).join('-') || targetItem.dataset.dragPath === draggedPath) return;
+            const rect = targetItem.getBoundingClientRect();
+            formContainer.querySelectorAll('.drop-above, .drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
+            if (e.clientY < rect.top + rect.height / 2) targetItem.classList.add('drop-above'); else targetItem.classList.add('drop-below');
+        });
+
+        formContainer.addEventListener('drop', (e) => {
+            e.preventDefault();
+            formContainer.querySelectorAll('.drop-above, .drop-below').forEach(el => el.classList.remove('drop-above', 'drop-below'));
+            const targetItem = e.target.closest('.flow-drag-item'); if (!targetItem || !draggedPath) return;
+            if (draggedType !== targetItem.dataset.dragType || draggedParent !== targetItem.dataset.dragPath.split('-').slice(0, -1).join('-') || targetItem.dataset.dragPath === draggedPath) return;
+
+            const insertPosition = (e.clientY < targetItem.getBoundingClientRect().top + targetItem.getBoundingClientRect().height / 2) ? 'before' : 'after';
+            if (currentManualPath) closeManualPanel();
+
+            const srcParts = draggedPath.split('-').map(Number); const tgtParts = targetItem.dataset.dragPath.split('-').map(Number);
+            let parentArray = state.flows;
+            if (srcParts.length === 2) parentArray = state.flows[srcParts[0]].children;
+            else if (srcParts.length === 3) parentArray = state.flows[srcParts[0]].children[srcParts[1]].children;
+
+            const srcIndex = srcParts[srcParts.length - 1]; let tgtIndex = tgtParts[tgtParts.length - 1];
+            const [movedItem] = parentArray.splice(srcIndex, 1);
+            if (srcIndex < tgtIndex) tgtIndex--;
+            if (insertPosition === 'after') tgtIndex++;
+
+            parentArray.splice(tgtIndex, 0, movedItem);
+            renderFull(); markDirty();
+        });
+    }
+
+    function setupDelegatedEvents() {
+        const formContainer = document.getElementById('form-container'); const manualBody = document.getElementById('manual-panel-body');
+        formContainer.addEventListener('input', (e) => {
+            const target = e.target;
+            if (target.dataset.global) { state.meta[target.dataset.global] = target.value; document.querySelectorAll(`.preview-global-${target.dataset.global}`).forEach(el => el.textContent = target.value); markDirty(); } 
+            else if (target.dataset.path) { const flow = getFlowByPath(target.dataset.path); if(flow){ flow.name = target.value; const previewEl = previewNodeMap.get(flow.id); if (previewEl) previewEl.textContent = target.value; if (currentManualPath === target.dataset.path) { const manualTitle = document.getElementById('manual-target-name'); if(manualTitle) manualTitle.textContent = target.value; } markDirty(); } }
+        });
+        
+        formContainer.addEventListener('click', (e) => {
+            const btn = e.target.closest('button');
+            if (!btn) { const toggle = e.target.closest('.interactive-toggle'); if (toggle && !e.target.closest('input') && !e.target.closest('.drag-handle')) { const flow = getFlowByPath(toggle.dataset.path); if(flow){ flow.isOpen = !flow.isOpen; updatePreview(); markDirty(); } } return; }
+            if (btn.classList.contains('btn-manual')) { e.preventDefault(); openManualPanel(btn.dataset.path); return; }
+            if (btn.classList.contains('btn-bottleneck')) { e.preventDefault(); const f = getFlowByPath(btn.dataset.path); if(f){ f.isBottleneck = !f.isBottleneck; renderFull(); markDirty(); } return; }
+            if (btn.id === 'btn-add-l' || btn.id === 'btn-add-l-bottom') { state.flows.push({ id: genId('L'), name: "新規大フロー", isOpen: true, isBottleneck: false, children: [] }); renderFull(); markDirty(); setTimeout(() => formContainer.scrollTop = formContainer.scrollHeight, 10); return; }
+            if (btn.classList.contains('btn-add-m')) { state.flows[btn.dataset.path].children.push({ id: genId('M'), name: "新規中フロー", isOpen: true, isBottleneck: false, children: [] }); renderFull(); markDirty(); return; }
+            if (btn.classList.contains('btn-add-s')) { const p = btn.dataset.path.split('-'); state.flows[p[0]].children[p[1]].children.push({ id: genId('S'), name: "新規小フロー", isBottleneck: false, linkedFlowId: null, manual: { summary: "", steps: [], notes: "", linkedFlows: [] } }); renderFull(); markDirty(); return; }
+            if (btn.classList.contains('btn-remove')) {
+                const path = btn.dataset.path; const parts = path.split('-'); let targetFlow = getFlowByPath(path);
+                if (targetFlow && targetFlow.id && checkIsLinked(targetFlow.id)) { if(!confirm(`このフロー（${targetFlow.name}）は他のマニュアルから関連フローとして参照されています。\n削除するとリンク切れになりますが、本当に削除しますか？`)) return; }
+                if (currentManualPath === path) closeManualPanel();
+                if (parts.length === 1) state.flows.splice(parts[0], 1); else if (parts.length === 2) state.flows[parts[0]].children.splice(parts[1], 1); else if (parts.length === 3) state.flows[parts[0]].children[parts[1]].children.splice(parts[2], 1);
+                renderFull(); markDirty(); return;
+            }
+            if (btn.id === 'btn-expand-all') { state.flows.forEach(l => { l.isOpen = true; l.children.forEach(m => m.isOpen = true); }); renderFull(); markDirty(); return; }
+            const btnClear = e.target.closest('#btn-clear-all');
+            if (btnClear) { if (btnClear.dataset.confirming === "true") { state.flows = []; renderFull(); markDirty(); } else { btnClear.dataset.confirming = "true"; btnClear.textContent = "本当に消去？"; btnClear.classList.replace('bg-red-50', 'bg-red-600'); btnClear.classList.replace('text-red-600', 'text-white'); setTimeout(() => { btnClear.dataset.confirming = "false"; btnClear.textContent = "全消去"; btnClear.classList.replace('bg-red-600', 'bg-red-50'); btnClear.classList.replace('text-white', 'text-red-600'); }, 3000); } }
+        });
+
+        manualBody.addEventListener('input', (e) => { const target = e.target; const flow = getFlowByPath(currentManualPath); if(!flow) return; if (target.dataset.field && target.dataset.index === undefined) { flow.manual[target.dataset.field] = target.value; markDirty(); } else if (target.dataset.index !== undefined) { flow.manual.steps[target.dataset.index][target.dataset.field] = target.value; markDirty(); } });
+        manualBody.addEventListener('click', async (e) => {
+            const btn = e.target.closest('button'); if (!btn) return; const flow = getFlowByPath(currentManualPath); if(!flow) return;
+            if (btn.id === 'btn-add-step') { flow.manual.steps.push({ id: genId('step'), order: flow.manual.steps.length + 1, title: '', description: '', attachments: [] }); markDirty(); renderManualPanel(); return; }
+            if (btn.classList.contains('btn-remove-step')) { if(!confirm('ステップを削除しますか？')) return; flow.manual.steps.splice(btn.dataset.index, 1); markDirty(); renderManualPanel(); return; }
+            if (btn.classList.contains('btn-remove-att')) {
+                if(!confirm('ファイルを削除しますか？')) return;
+                const step = flow.manual.steps[btn.dataset.stepIndex]; const attId = btn.dataset.attId; await StorageManager.deleteAttachment(attId); step.attachments = step.attachments.filter(a => a.id !== attId); markDirty(); renderManualPanel(); return;
+            }
+            if (btn.classList.contains('btn-add-link')) { openLinkModal(flow.id); return; }
+            if (btn.classList.contains('btn-remove-link')) { flow.manual.linkedFlows = flow.manual.linkedFlows.filter(id => id !== btn.dataset.id); markDirty(); renderManualPanel(); updatePreview(); return; }
+        });
+        manualBody.addEventListener('change', async (e) => {
+            if (e.target.classList.contains('step-file-input')) {
+                const files = e.target.files; if (!files.length) return; const flow = getFlowByPath(currentManualPath); if(!flow) return; const step = flow.manual.steps[e.target.dataset.stepIndex]; showLoading('ファイル処理中...');
+                for (let file of files) { const attId = genId('att'); const thumbnail = await generateThumbnail(file); const attInfo = { id: attId, projectId: state.meta.projectId, filename: file.name, mimeType: file.type, size: file.size, thumbnail: thumbnail, addedAt: new Date().toISOString() }; await StorageManager.saveAttachment(attInfo, file); step.attachments.push(attInfo); }
+                hideLoading(); markDirty(); renderManualPanel();
+            }
+        });
+
+        const previewWrapper = document.getElementById('preview-wrapper');
+        previewWrapper.addEventListener('click', (e) => {
+            // アイコンクリック時の伝播を停止
+            if (e.target.closest('.preview-icon-wrapper')) {
+                e.stopPropagation();
+            }
+            
+            const textSpan = e.target.closest('[data-action-path]');
+            if (textSpan) {
+                e.stopPropagation();
+                const path = textSpan.dataset.actionPath;
+                const manualBtn = document.querySelector(`.btn-manual[data-path='${path}']`);
+                if(manualBtn) manualBtn.click();
+            }
+        });
+    }
+
+    function renderFull() {
+        renderFormHtml();
+        updatePreview();
+        lucide.createIcons({ root: document.getElementById('form-container') });
+        document.getElementById('btn-undo').disabled = historyIndex <= 0;
+        document.getElementById('btn-redo').disabled = historyIndex >= history.length - 1;
+    }
+
+    function renderFormHtml() {
+        let html = `
+            <div class="mb-6 space-y-4"><div><label class="block text-xs font-bold text-slate-500 mb-1">帳票タイトル</label><input type="text" class="w-full border border-slate-300 rounded p-2 text-sm" data-global="title" value="${escapeHTML(state.meta.title)}"></div>
+            <div class="flex gap-2"><div class="flex-1"><label class="block text-xs font-bold text-slate-500 mb-1">作成日</label><input type="text" class="w-full border border-slate-300 rounded p-2 text-sm" data-global="date" value="${escapeHTML(state.meta.date)}"></div><div class="flex-1"><label class="block text-xs font-bold text-slate-500 mb-1">作成者</label><input type="text" class="w-full border border-slate-300 rounded p-2 text-sm" data-global="author" value="${escapeHTML(state.meta.author)}"></div></div></div>
+            <div class="flex justify-between items-center border-b border-slate-200 pb-2 mb-3"><h3 class="font-bold text-slate-700 text-sm">フロー構造編集</h3><div class="flex gap-1 items-center"><button id="btn-undo" class="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30"><i data-lucide="undo" class="w-4 h-4"></i></button><button id="btn-redo" class="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30"><i data-lucide="redo" class="w-4 h-4"></i></button><div class="w-px h-4 bg-slate-300 mx-1"></div><button id="btn-clear-all" class="text-[10px] bg-red-50 hover:bg-red-100 text-red-600 font-bold py-1 px-2 rounded" data-confirming="false">全消去</button><button id="btn-expand-all" class="text-[10px] bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-1 px-2 rounded">全展開</button><button id="btn-add-l" class="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold py-1 px-2 rounded flex items-center gap-1 border border-blue-200"><i data-lucide="plus" class="w-3 h-3"></i> 大フロー</button></div></div><div class="space-y-3">
+        `;
+        state.flows.forEach((l, i) => {
+            if(!l.id) l.id = genId('L');
+            html += `<div class="border-2 border-slate-800 rounded bg-white p-2 relative flow-drag-item" data-drag-path="${i}" data-drag-type="L"><button class="btn-remove absolute top-2 right-2 text-slate-400 hover:text-red-500" data-path="${i}"><i data-lucide="x" class="w-4 h-4"></i></button><div class="flex items-center gap-2 mb-2 pr-6 interactive-toggle" data-path="${i}"><i data-lucide="grip-vertical" class="w-4 h-4 text-slate-400 drag-handle shrink-0"></i><span class="text-xs font-bold bg-slate-800 text-white px-1.5 py-0.5 rounded shrink-0">大</span><input type="text" class="w-full border-b border-slate-300 focus:border-blue-500 text-sm font-bold bg-transparent p-1" data-path="${i}" value="${escapeHTML(l.name)}"><button class="btn-bottleneck p-1 rounded ${l.isBottleneck ? 'bg-red-100 text-red-600' : 'text-slate-300 hover:bg-slate-100'}" data-path="${i}"><i data-lucide="alert-circle" class="w-4 h-4"></i></button></div><div class="pl-4 space-y-2 border-l-2 border-slate-200 ml-2 mt-2">${l.children.map((m, mi) => {
+                if(!m.id) m.id = genId('M');
+                return `<div class="border border-slate-300 rounded bg-slate-50 p-2 relative flow-drag-item" data-drag-path="${i}-${mi}" data-drag-type="M"><button class="btn-remove absolute top-1 right-1 text-slate-400 hover:text-red-500" data-path="${i}-${mi}"><i data-lucide="x" class="w-3 h-3"></i></button><div class="flex items-center gap-2 mb-2 pr-6 interactive-toggle" data-path="${i}-${mi}"><i data-lucide="grip-vertical" class="w-4 h-4 text-slate-400 drag-handle shrink-0"></i><span class="text-[10px] font-bold bg-slate-500 text-white px-1.5 py-0.5 rounded shrink-0">中</span><input type="text" class="w-full border-b border-slate-300 focus:border-blue-500 text-sm bg-transparent p-1" data-path="${i}-${mi}" value="${escapeHTML(m.name)}"><button class="btn-bottleneck p-1 rounded ${m.isBottleneck ? 'bg-red-100 text-red-600' : 'text-slate-300 hover:bg-slate-100'}" data-path="${i}-${mi}"><i data-lucide="alert-circle" class="w-3.5 h-3.5"></i></button></div><div class="pl-4 space-y-1 border-l-2 border-slate-200 ml-2 mt-2">${m.children.map((s, si) => {
+                    if(!s.id) s.id = genId('S'); const hasMan = s.manual && (s.manual.summary || s.manual.steps.length > 0 || s.manual.notes || (s.manual.linkedFlows && s.manual.linkedFlows.length > 0));
+                    return `<div class="flex items-center gap-1.5 relative group pr-4 flow-drag-item" data-drag-path="${i}-${mi}-${si}" data-drag-type="S"><i data-lucide="grip-vertical" class="w-3 h-3 text-slate-400 drag-handle shrink-0"></i><span class="text-[10px] text-slate-400 shrink-0">└ 小</span><input type="text" class="w-full border-b border-transparent hover:border-slate-300 focus:border-blue-500 text-xs bg-transparent p-1" data-path="${i}-${mi}-${si}" value="${escapeHTML(s.name)}"><button class="btn-manual p-1 rounded shrink-0 ${hasMan ? 'text-blue-600 bg-blue-50 border border-blue-200' : 'text-slate-300 hover:bg-slate-200'}" data-path="${i}-${mi}-${si}"><i data-lucide="book-open" class="w-3 h-3"></i></button><button class="btn-bottleneck p-0.5 rounded shrink-0 ${s.isBottleneck ? 'bg-red-100 text-red-600' : 'text-slate-300 hover:bg-slate-100'}" data-path="${i}-${mi}-${si}"><i data-lucide="alert-circle" class="w-3 h-3"></i></button><button class="btn-remove absolute right-0 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500" data-path="${i}-${mi}-${si}"><i data-lucide="x" class="w-3 h-3"></i></button></div>`;
+                }).join('')}<button class="btn-add-s text-[10px] text-slate-500 hover:text-blue-600 mt-1 flex items-center gap-1" data-path="${i}-${mi}"><i data-lucide="plus" class="w-3 h-3"></i> 小フロー追加</button></div></div>`;
+            }).join('')}<button class="btn-add-m text-xs text-slate-600 hover:text-blue-600 mt-2 flex items-center gap-1 font-bold" data-path="${i}"><i data-lucide="plus" class="w-3 h-3"></i> 中フロー追加</button></div></div>`;
+        });
+        html += `<button id="btn-add-l-bottom" class="w-full mt-4 text-sm bg-white hover:bg-blue-50 text-blue-600 font-bold py-3 border-2 border-dashed border-blue-200 rounded flex justify-center items-center gap-2"><i data-lucide="plus" class="w-4 h-4"></i> 新しい大フローを追加</button></div>`;
+        document.getElementById('form-container').innerHTML = html;
+    }
+
+    function updatePreview() {
+        hideManualTooltip(); 
+        previewNodeMap.clear(); 
+        const previewWrapper = document.getElementById('preview-wrapper'); previewWrapper.innerHTML = ''; const groups = []; const MAX_PER_PAGE = 5;
+        for (let i = 0; i < state.flows.length; i += MAX_PER_PAGE) groups.push(state.flows.slice(i, i + MAX_PER_PAGE));
+        if (groups.length === 0) groups.push([]); const totalPages = groups.length;
+        const hasBottleneck = state.flows.some(l => l.isBottleneck || l.children.some(m => m.isBottleneck || m.children.some(s => s.isBottleneck)));
+
+        groups.forEach((group, pageIndex) => {
+            const container = document.createElement('div'); container.className = 'capture-area-container'; container.style.width = PAGE_SIZES.w + 'px'; container.style.height = PAGE_SIZES.h + 'px';
+            const page = document.createElement('div'); page.className = 'pdf-page bg-white'; const inner = document.createElement('div'); inner.className = 'page-inner flex-1 h-full relative'; page.appendChild(inner);
+            const header = document.createElement('div'); header.className = 'w-full mb-8 border-b-2 border-slate-800 pb-4 shrink-0 flex justify-between items-end';
+            header.innerHTML = `<div class="flex items-center gap-4"><div class="text-[28px] font-black text-slate-800 tracking-wider preview-global-title">${escapeHTML(state.meta.title)}</div>${hasBottleneck ? `<div class="flex items-center gap-1 bg-red-50 text-red-600 px-2 py-1 rounded border border-red-200 text-[11px] font-bold"><i data-lucide="alert-circle" class="w-3.5 h-3.5"></i> ボトルネック検出</div>` : ''}</div><div class="text-right shrink-0"><div class="text-[13px] text-slate-600 mb-1 whitespace-nowrap preview-global-date">作成日: ${escapeHTML(state.meta.date)}</div><div class="text-[15px] text-slate-800 font-bold whitespace-nowrap preview-global-author">作成者: ${escapeHTML(state.meta.author || '')}</div></div>`;
+            inner.appendChild(header);
+
+            const flowContainer = document.createElement('div'); flowContainer.className = 'flex flex-row items-start gap-4 w-full justify-start';
+            group.forEach((lFlow, idxInGroup) => {
+                const absoluteIndex = pageIndex * MAX_PER_PAGE + idxInGroup; const isLastOverall = absoluteIndex === state.flows.length - 1;
+                const colWrapper = document.createElement('div'); colWrapper.className = 'flex items-start gap-4'; const col = document.createElement('div'); col.className = 'flex flex-col items-center relative shrink-0 w-[260px]';
+                
+                const lNode = document.createElement('div'); lNode.className = `w-full ${lFlow.isBottleneck ? 'bg-red-600 text-white shadow-md border-red-800' : 'bg-slate-800 text-white shadow-sm border-slate-800'} border-2 p-3 text-[16px] font-bold text-center rounded relative z-10 cursor-pointer flow-node flex items-center justify-between`;
+                lNode.innerHTML = `<span class="node-text-clamp flex-1 text-left" id="preview-text-${lFlow.id}">${escapeHTML(lFlow.name)}</span>${lFlow.children.length > 0 ? `<i data-lucide="${lFlow.isOpen ? 'chevron-down' : 'chevron-right'}" class="w-5 h-5 shrink-0 opacity-80 ml-1"></i>` : ''}`;
+                lNode.onclick = () => { lFlow.isOpen = !lFlow.isOpen; updatePreview(); markDirty(); }; col.appendChild(lNode);
+                previewNodeMap.set(lFlow.id, lNode.querySelector(`#preview-text-${lFlow.id}`));
+
+                if (lFlow.isOpen && lFlow.children.length > 0) {
+                    const mContainer = document.createElement('div'); mContainer.className = 'flex flex-col w-full relative';
+                    lFlow.children.forEach((mFlow, mIndex) => {
+                        const downArrow = document.createElement('div'); downArrow.className = 'py-2 flex justify-center'; downArrow.innerHTML = `<i data-lucide="arrow-down" class="w-5 h-5 text-slate-500"></i>`; mContainer.appendChild(downArrow);
+                        const mItem = document.createElement('div'); mItem.className = 'relative z-10 w-full flex flex-col';
+                        const mNodeWrapper = document.createElement('div'); mNodeWrapper.className = `${mFlow.isBottleneck ? 'bg-red-50 border-red-500 text-red-800 shadow-md' : 'bg-white border-slate-600 text-slate-800 shadow-sm'} border-2 p-2.5 text-[14px] font-bold rounded cursor-pointer flow-node flex items-center justify-between`;
+                        mNodeWrapper.innerHTML = `<span class="node-text-clamp flex-1 text-left" id="preview-text-${mFlow.id}">${escapeHTML(mFlow.name)}</span>${mFlow.children.length > 0 ? `<i data-lucide="${mFlow.isOpen ? 'chevron-down' : 'chevron-right'}" class="w-4 h-4 shrink-0 opacity-70 ml-1"></i>` : ''}`;
+                        mNodeWrapper.onclick = () => { mFlow.isOpen = !mFlow.isOpen; updatePreview(); markDirty(); }; mItem.appendChild(mNodeWrapper);
+                        previewNodeMap.set(mFlow.id, mNodeWrapper.querySelector(`#preview-text-${mFlow.id}`));
+
+                        if (mFlow.isOpen && mFlow.children.length > 0) {
+                            const sContainer = document.createElement('div'); sContainer.className = 'mt-2 ml-6 flex flex-col gap-2 relative';
+                            mFlow.children.forEach((sFlow, sIndex) => {
+                                const isLastS = sIndex === mFlow.children.length - 1; const sNode = document.createElement('div'); sNode.className = 'relative z-10 pl-4 flex items-center group';
+                                const vLineClass = isLastS ? "absolute left-0 -top-2 h-[calc(50%+8px)] w-[2px] bg-slate-300 z-0" : "absolute left-0 -top-2 h-[calc(100%+8px)] w-[2px] bg-slate-300 z-0"; const hLineClass = "absolute left-0 top-1/2 w-4 h-[2px] bg-slate-300 z-0";
+                                const sBgClass = sFlow.isBottleneck ? 'bg-red-50 border-red-400 text-red-800 font-bold shadow-sm' : 'bg-slate-50 border-slate-300 text-slate-700 font-medium';
+                                
+                                const hasManual = sFlow.manual && (sFlow.manual.summary || sFlow.manual.steps.length > 0 || sFlow.manual.notes); const linkedFlows = (sFlow.manual && sFlow.manual.linkedFlows) ? sFlow.manual.linkedFlows : [];
+                                
+                                let iconsHtml = '';
+                                if (linkedFlows.length > 0) iconsHtml += `<button class="btn-jump-link text-indigo-500 hover:text-indigo-700 bg-indigo-50 rounded p-0.5 transition-colors" data-target="${linkedFlows[0]}" title="関連フローへジャンプ"><i data-lucide="link" class="w-3.5 h-3.5"></i></button>`;
+                                if (hasManual) iconsHtml += `<button class="manual-preview-icon text-blue-500 hover:text-blue-700 bg-blue-50 rounded p-0.5 transition-colors" data-flow-id="${sFlow.id}" data-path="${absoluteIndex}-${mIndex}-${sIndex}"><i data-lucide="book-open" class="w-3.5 h-3.5"></i></button>`;
+
+                                sNode.innerHTML = `<div class="${vLineClass}"></div><div class="${hLineClass}"></div><div id="preview-node-${sFlow.id}" class="flex-1 ${sBgClass} border p-2 text-[13px] rounded z-10 relative flex justify-between items-center gap-1 cursor-pointer hover:border-blue-400 transition-colors"><span class="node-text-clamp cursor-pointer hover:text-blue-600 transition-colors" id="preview-text-${sFlow.id}" data-action-path="${absoluteIndex}-${mIndex}-${sIndex}">${escapeHTML(sFlow.name)}</span><div class="flex items-center gap-1 shrink-0 z-20 preview-icon-wrapper">${iconsHtml}</div></div>`;
+                                sContainer.appendChild(sNode);
+                                previewNodeMap.set(sFlow.id, sNode.querySelector(`#preview-text-${sFlow.id}`));
+                            }); mItem.appendChild(sContainer);
+                        } mContainer.appendChild(mItem);
+                    }); col.appendChild(mContainer);
+                } colWrapper.appendChild(col);
+                if (!isLastOverall) { const rightArrow = document.createElement('div'); rightArrow.className = 'flex items-center justify-center shrink-0 h-[48px]'; rightArrow.innerHTML = `<i data-lucide="arrow-right" class="w-8 h-8 text-slate-800"></i>`; colWrapper.appendChild(rightArrow); }
+                flowContainer.appendChild(colWrapper);
+            }); inner.appendChild(flowContainer);
+            const footer = document.createElement('div'); footer.className = 'absolute bottom-[25px] w-full text-center text-slate-400 text-[11px] whitespace-nowrap left-0'; footer.textContent = totalPages > 1 ? `Page ${pageIndex + 1} / ${totalPages}` : ``; page.appendChild(footer);
+            container.appendChild(page); previewWrapper.appendChild(container);
+        });
+        
+        lucide.createIcons({ root: previewWrapper }); 
+        previewWrapper.querySelectorAll('.btn-jump-link').forEach(btn => { btn.addEventListener('click', (e) => { e.stopPropagation(); const tId = e.currentTarget.dataset.target; const el = document.getElementById(`preview-node-${tId}`); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' }); el.classList.add('highlight-target'); setTimeout(() => el.classList.remove('highlight-target'), 2000); } else alert('リンク先のフローが見つかりません。'); }); });
+        
+        requestAnimationFrame(() => { requestAnimationFrame(() => { autoAdjustDensity(); adjustZoom(0); }); });
+    }
+
+    let tooltipTimeout;
+    
+    function moveTooltipCarouselLocal(dir, totalSteps) {
+        const tooltip = document.getElementById('manual-tooltip');
+        const track = document.getElementById('tooltip-carousel-track');
+        if (!track) return;
+        
+        let current = parseInt(tooltip.dataset.currentStep || 0, 10);
+        current += dir;
+        if (current < 0) current = 0;
+        if (current >= totalSteps) current = totalSteps - 1;
+        
+        tooltip.dataset.currentStep = current;
+        track.style.transform = `translateX(-${current * 360}px)`;
+    }
+
+    function setupTooltipAndViewer() {
+        const previewWrapper = document.getElementById('preview-wrapper');
+        const tooltip = document.getElementById('manual-tooltip');
+        let viewerSlides = []; let viewerCurrentIndex = -1; let viewerCurrentObjectUrl = null;
+        const viewer = document.getElementById('image-viewer'); const viewerImg = document.getElementById('viewer-img');
+        const viewerLoading = document.getElementById('viewer-loading'); const btnCloseViewer = document.getElementById('btn-close-viewer');
+        const viewerDownload = document.getElementById('viewer-download');
+        
+        previewWrapper.addEventListener('pointerover', (e) => {
+            const icon = e.target.closest('.manual-preview-icon');
+            if (icon) { clearTimeout(tooltipTimeout); requestAnimationFrame(() => { const flowId = icon.dataset.flowId; const data = findFlowById(flowId); if (data && data.flow.manual) { showManualTooltip(icon, data.flow.manual, data.flow.name); } }); }
+        });
+        previewWrapper.addEventListener('pointerout', (e) => { const icon = e.target.closest('.manual-preview-icon'); if (icon) { tooltipTimeout = setTimeout(() => hideManualTooltip(), 200); } });
+        tooltip.addEventListener('pointerenter', () => clearTimeout(tooltipTimeout));
+        tooltip.addEventListener('pointerleave', () => { tooltipTimeout = setTimeout(() => hideManualTooltip(), 200); });
+        previewWrapper.addEventListener('click', (e) => { const icon = e.target.closest('.manual-preview-icon'); if (icon) { e.stopPropagation(); hideManualTooltip(); const path = icon.dataset.path; if (path) openManualPanel(path); } });
+
+        function collectViewerSlides(clickedEl) {
+            const attachmentEls = Array.from(tooltip.querySelectorAll('[data-att-id]')); const stepMap = new Map();
+            attachmentEls.forEach(el => {
+                const stepIndex = Number(el.dataset.stepIndex ?? -1); if (stepIndex < 0) return;
+                if (!stepMap.has(stepIndex)) { stepMap.set(stepIndex, { stepIndex, attId: el.dataset.attId, filename: el.dataset.filename || 'attachment', stepNo: el.dataset.stepNo || `Step ${stepIndex + 1}`, stepTitle: el.dataset.stepTitle || 'タイトル未設定', stepDescription: el.dataset.stepDescription || '説明はありません' }); }
+            });
+            viewerSlides = Array.from(stepMap.values()).sort((a, b) => a.stepIndex - b.stepIndex);
+            const clickedStepIndex = Number(clickedEl.dataset.stepIndex ?? -1); viewerCurrentIndex = viewerSlides.findIndex(slide => slide.stepIndex === clickedStepIndex);
+            if (viewerCurrentIndex < 0 && viewerSlides.length > 0) viewerCurrentIndex = 0;
+        }
+
+        async function openViewerSlide(index) {
+            if (index < 0 || index >= viewerSlides.length) return;
+            viewerCurrentIndex = index; const slide = viewerSlides[index];
+            document.getElementById('viewer-step-no').textContent = slide.stepNo;
+            document.getElementById('viewer-step-title').textContent = slide.stepTitle;
+            document.getElementById('viewer-step-description').textContent = slide.stepDescription;
+            document.getElementById('viewer-step-position').textContent = `${viewerCurrentIndex + 1} / ${viewerSlides.length}`;
+            document.getElementById('btn-viewer-prev-step').disabled = viewerCurrentIndex <= 0;
+            document.getElementById('btn-viewer-next-step').disabled = viewerCurrentIndex >= viewerSlides.length - 1;
+
+            viewerImg.classList.add('hidden'); viewerLoading.classList.remove('hidden');
+            if (viewerCurrentObjectUrl) { URL.revokeObjectURL(viewerCurrentObjectUrl); viewerCurrentObjectUrl = null; }
+
+            const blob = await StorageManager.getAttachmentBlob(slide.attId);
+            if (!blob) { alert('画像データの取得に失敗しました。'); return; }
+
+            viewerCurrentObjectUrl = URL.createObjectURL(blob);
+            viewerImg.src = viewerCurrentObjectUrl; viewerDownload.href = viewerCurrentObjectUrl; viewerDownload.download = slide.filename || 'attachment';
+            viewerImg.onload = () => { viewerLoading.classList.add('hidden'); viewerImg.classList.remove('hidden'); };
+        }
+
+        tooltip.addEventListener('click', async (e) => {
+            const navBtn = e.target.closest('.tooltip-nav-btn');
+            if (navBtn) {
+                e.stopPropagation();
+                const dir = parseInt(navBtn.dataset.carouselDir, 10);
+                const total = parseInt(navBtn.dataset.totalSteps, 10);
+                moveTooltipCarouselLocal(dir, total);
+                return;
+            }
+
+            const imgContainer = e.target.closest('[data-att-id]'); if (!imgContainer) return;
+            collectViewerSlides(imgContainer); viewer.classList.remove('hidden'); setTimeout(() => viewer.classList.remove('opacity-0'), 10); await openViewerSlide(viewerCurrentIndex);
+        });
+
+        document.getElementById('btn-viewer-prev-step').addEventListener('click', async (e) => { e.stopPropagation(); if (viewerCurrentIndex > 0) await openViewerSlide(viewerCurrentIndex - 1); });
+        document.getElementById('btn-viewer-next-step').addEventListener('click', async (e) => { e.stopPropagation(); if (viewerCurrentIndex < viewerSlides.length - 1) await openViewerSlide(viewerCurrentIndex + 1); });
+
+        const closeViewer = () => {
+            viewer.classList.add('opacity-0');
+            setTimeout(() => {
+                viewer.classList.add('hidden'); viewerImg.src = '';
+                if (viewerCurrentObjectUrl) { URL.revokeObjectURL(viewerCurrentObjectUrl); viewerCurrentObjectUrl = null; }
+                viewerSlides = []; viewerCurrentIndex = -1;
+                document.getElementById('viewer-step-no').textContent = 'Step -'; document.getElementById('viewer-step-title').textContent = 'タイトル未設定'; document.getElementById('viewer-step-description').textContent = '説明はありません'; document.getElementById('viewer-step-position').textContent = '0 / 0';
+                document.getElementById('btn-viewer-prev-step').disabled = true; document.getElementById('btn-viewer-next-step').disabled = true;
+            }, 200);
+        };
+        btnCloseViewer.addEventListener('click', closeViewer); viewer.addEventListener('click', (e) => { if(e.target === viewer) closeViewer(); });
+    }
+
+    function showManualTooltip(anchorEl, manualRaw, flowName) {
+        const tooltip = document.getElementById('manual-tooltip');
+        const manual = { summary: '', steps: [], notes: '', linkedFlows: [], ...manualRaw };
+        let html = `<div class="bg-slate-800 text-white px-3 py-2 flex items-center gap-2 shrink-0"><i data-lucide="book-open" class="w-4 h-4 text-blue-300"></i><span class="font-bold text-sm truncate flex-1">${escapeHTML(flowName)}</span></div><div class="flex flex-col flex-1 overflow-hidden bg-slate-50 relative">`;
+        if (manual.summary) html += `<div class="px-4 py-3 bg-white border-b border-slate-200 shrink-0 shadow-sm z-10"><div class="text-[10px] font-bold text-slate-500 mb-1">概要</div><div class="text-xs text-slate-800 leading-relaxed">${escapeHTML(manual.summary).replace(/\n/g, '<br>')}</div></div>`;
+        const stepCount = manual.steps ? manual.steps.length : 0;
+        
+        if (stepCount > 0) {
+            html += `<div class="relative overflow-hidden flex-1 group"><div class="flex carousel-track h-full" id="tooltip-carousel-track">`;
+            manual.steps.forEach((step, idx) => {
+                html += `<div class="carousel-slide p-4 ${stepCount > 1 ? 'px-14 pt-10' : ''} overflow-y-auto h-full box-border"><div class="flex items-center justify-between mb-2"><span class="bg-slate-700 text-white text-[10px] font-bold px-2 py-0.5 rounded">Step ${idx + 1} / ${stepCount}</span></div><div class="font-bold text-sm text-slate-800 mb-2">${escapeHTML(step.title)}</div><div class="text-xs text-slate-600 mb-4 leading-relaxed whitespace-pre-wrap">${escapeHTML(step.description)}</div>`;
+                if (step.attachments && step.attachments.length > 0) {
+                    html += `<div class="grid grid-cols-4 gap-2 border-t border-slate-200 pt-3 mt-3">`;
+                    step.attachments.forEach(att => {
+                        html += `<div class="border border-slate-200 bg-white rounded p-1 flex flex-col items-center justify-center cursor-pointer hover:border-blue-500 hover:shadow-md transition-all h-16 relative overflow-hidden" data-att-id="${att.id}" data-filename="${escapeHTML(att.filename)}" data-step-index="${idx}" data-step-no="Step ${idx + 1}" data-step-title="${escapeHTML(step.title || 'タイトル未設定')}" data-step-description="${escapeHTML(step.description || '説明はありません')}" title="拡大表示">${att.thumbnail ? `<img src="${att.thumbnail}" class="w-full h-full object-cover">` : `<i data-lucide="file" class="w-6 h-6 text-slate-400"></i>`}<div class="absolute bottom-0 w-full bg-black/60 text-white text-[8px] truncate px-1 text-center">${escapeHTML(att.filename)}</div></div>`;
+                    }); html += `</div>`;
+                } html += `</div>`;
+            }); html += `</div>`;
+            if (stepCount > 1) {
+                html += `
+                    <button class="absolute left-2 top-3 bg-white/95 border border-slate-200 shadow-md rounded-full p-1 text-slate-600 hover:text-blue-600 hover:bg-blue-50 opacity-0 group-hover:opacity-100 transition-all z-20 tooltip-nav-btn" data-carousel-dir="-1" data-total-steps="${stepCount}"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
+                    <button class="absolute right-2 top-3 bg-white/95 border border-slate-200 shadow-md rounded-full p-1 text-slate-600 hover:text-blue-600 hover:bg-blue-50 opacity-0 group-hover:opacity-100 transition-all z-20 tooltip-nav-btn" data-carousel-dir="1" data-total-steps="${stepCount}"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+                `;
+            } html += `</div>`;
+        } else if (!manual.summary && (!manual.notes && manual.linkedFlows.length === 0)) html += `<div class="p-6 text-center text-xs text-slate-400">マニュアルの記述がありません</div>`;
+
+        if (manual.notes || manual.linkedFlows.length > 0) {
+            html += `<div class="px-4 py-3 bg-slate-100 border-t border-slate-200 shrink-0 text-xs">`;
+            if (manual.notes) html += `<div class="font-bold text-slate-500 mb-1">備考</div><div class="text-slate-700 whitespace-pre-wrap">${escapeHTML(manual.notes)}</div>`;
+            if (manual.linkedFlows.length > 0) {
+                html += `<div class="font-bold text-indigo-500 mt-2 mb-1 flex items-center gap-1"><i data-lucide="link" class="w-3 h-3"></i> 関連リンク</div><ul class="text-indigo-700 pl-4 list-disc space-y-1">`;
+                manual.linkedFlows.forEach(id => { const tgt = findFlowById(id); if(tgt) html += `<li class="truncate">${escapeHTML(tgt.flow.name)}</li>`; }); html += `</ul>`;
+            } html += `</div>`;
+        }
+        html += `</div>`; tooltip.innerHTML = html; lucide.createIcons({ root: tooltip }); tooltip.dataset.currentStep = 0;
+
+        const rect = anchorEl.getBoundingClientRect(); let top = rect.bottom + 8; let left = rect.left - 160;
+        const tooltipW = 360; const tooltipH = 460;
+        if (left < 10) left = 10; if (left + tooltipW > window.innerWidth - 10) left = window.innerWidth - tooltipW - 10;
+        if (top + tooltipH > window.innerHeight) { top = rect.top - tooltipH - 8; if (top < 10) top = 10; }
+        tooltip.style.left = `${left}px`; tooltip.style.top = `${top}px`; tooltip.style.transform = 'none'; tooltip.classList.add('visible');
+    }
+
+    function hideManualTooltip() { document.getElementById('manual-tooltip').classList.remove('visible'); }
+    function openManualPanel(path) { currentManualPath = path; renderManualPanel(); document.getElementById('manual-panel').classList.remove('translate-x-full'); hideManualTooltip(); }
+    function closeManualPanel() { currentManualPath = null; document.getElementById('manual-panel').classList.add('translate-x-full'); }
+
+    function renderManualPanel() {
+        if (!currentManualPath) return;
+        const flow = getFlowByPath(currentManualPath); if(!flow) return; const manual = flow.manual; const body = document.getElementById('manual-panel-body');
+        if(!manual.linkedFlows) manual.linkedFlows = [];
+        let html = `<div class="bg-white p-3 rounded border border-slate-200 shadow-sm"><div class="text-[10px] text-slate-500 font-bold mb-1">対象フロー</div><div class="font-bold text-slate-800 text-sm" id="manual-target-name">${escapeHTML(flow.name)}</div></div><div class="space-y-1 mt-4"><label class="block text-xs font-bold text-slate-600">概要 (Summary)</label><textarea class="w-full border border-slate-300 rounded p-2 text-sm manual-input focus:border-blue-500" data-field="summary" rows="2" placeholder="フローの目的や概要...">${escapeHTML(manual.summary)}</textarea></div><div class="space-y-2 mt-4"><div class="flex justify-between items-center border-b border-slate-200 pb-2"><label class="block text-xs font-bold text-slate-600">作業ステップ</label><button id="btn-add-step" class="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold py-1 px-2 rounded flex items-center gap-1 border border-blue-200"><i data-lucide="plus" class="w-3 h-3"></i> 追加</button></div><div id="manual-steps-container" class="space-y-4">`;
+        if(manual.steps.length === 0) html += `<div class="text-xs text-slate-400 text-center py-4 border-2 border-dashed border-slate-200 rounded">ステップがありません</div>`;
+        manual.steps.forEach((step, index) => {
+            html += `<div class="border border-slate-300 rounded bg-white p-3 relative group shadow-sm transition-shadow hover:shadow"><button class="absolute top-2 right-2 p-1 text-slate-300 hover:text-red-500 rounded btn-remove-step" data-index="${index}"><i data-lucide="x" class="w-3.5 h-3.5"></i></button><div class="mb-2"><span class="bg-slate-700 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">Step ${index + 1}</span></div><input type="text" class="w-full border-b border-slate-200 mb-2 p-1 text-sm font-bold focus:border-blue-500 manual-step-input" data-index="${index}" data-field="title" value="${escapeHTML(step.title)}" placeholder="タイトル"><textarea class="w-full border border-slate-200 rounded p-1.5 text-xs focus:border-blue-500 manual-step-input min-h-[50px] mb-2" data-index="${index}" data-field="description" placeholder="具体的な作業内容...">${escapeHTML(step.description)}</textarea><div class="bg-slate-50 border border-slate-200 rounded p-2"><div class="text-[10px] font-bold text-slate-500 mb-2 flex items-center gap-1"><i data-lucide="paperclip" class="w-3 h-3"></i> 添付ファイル</div><div class="flex flex-wrap gap-2 mb-2 attachment-list" id="att-list-${step.id}">${step.attachments.map(att => `<div class="relative group border border-slate-200 bg-white rounded p-1 flex flex-col items-center justify-center w-20 h-20 shadow-sm text-center"><button class="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity btn-remove-att z-10" data-step-index="${index}" data-att-id="${att.id}"><i data-lucide="x" class="w-3 h-3"></i></button>${att.thumbnail ? `<img src="${att.thumbnail}" class="max-w-full max-h-[40px] object-contain mb-1">` : `<i data-lucide="file" class="w-6 h-6 text-slate-400 mb-1"></i>`}<div class="text-[8px] truncate w-full px-1 text-slate-600" title="${escapeHTML(att.filename)}">${escapeHTML(att.filename)}</div></div>`).join('')}</div><div class="file-drop-zone rounded p-3 text-center cursor-pointer relative overflow-hidden group hover:bg-blue-50"><input type="file" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer step-file-input" data-step-index="${index}" multiple><div class="text-[10px] text-slate-500 flex flex-col items-center gap-1 group-hover:text-blue-600 transition-colors"><i data-lucide="upload-cloud" class="w-4 h-4"></i> <span>クリック または ドラッグ＆ドロップ</span></div></div></div></div>`;
+        });
+        html += `</div></div><div class="space-y-2 mt-6 border-t border-slate-200 pt-4"><div class="flex justify-between items-center"><label class="block text-xs font-bold text-slate-600">関連フロー (Links)</label><button class="btn-add-link text-[10px] bg-indigo-50 text-indigo-600 px-2 py-1 rounded border border-indigo-200 hover:bg-indigo-100 flex items-center gap-1"><i data-lucide="link" class="w-3 h-3"></i> 紐付け</button></div><div class="space-y-1">`;
+        if (manual.linkedFlows.length === 0) html += `<div class="text-xs text-slate-400 p-2 border border-dashed border-slate-200 rounded">関連フローはありません</div>`;
+        else { manual.linkedFlows.forEach(linkId => { const target = findFlowById(linkId); if (target) html += `<div class="flex items-center justify-between bg-white border border-slate-200 rounded p-2 shadow-sm group"><div class="flex flex-col overflow-hidden text-xs"><span class="text-[9px] text-slate-400 truncate">${escapeHTML(target.parentL.name)} > ${escapeHTML(target.parentM.name)}</span><span class="font-bold text-indigo-700 truncate flex items-center gap-1"><i data-lucide="link-2" class="w-3 h-3"></i> ${escapeHTML(target.flow.name)}</span></div><button class="text-slate-300 hover:text-red-500 btn-remove-link shrink-0 p-1" data-id="${linkId}"><i data-lucide="x" class="w-4 h-4"></i></button></div>`; else html += `<div class="flex items-center justify-between bg-red-50 border border-red-200 rounded p-2 text-xs text-red-600 shadow-sm"><span class="flex items-center gap-1"><i data-lucide="alert-triangle" class="w-3 h-3"></i> 削除済のリンク</span><button class="text-red-400 hover:text-red-700 btn-remove-link shrink-0 p-1" data-id="${linkId}"><i data-lucide="x" class="w-4 h-4"></i></button></div>`; }); }
+        html += `</div></div><div class="space-y-1 mt-4 border-t border-slate-200 pt-4 pb-8"><label class="block text-xs font-bold text-slate-600">備考 (Notes)</label><textarea class="w-full border border-slate-300 rounded p-2 text-sm manual-input focus:border-blue-500" data-field="notes" rows="2">${escapeHTML(manual.notes)}</textarea></div>`;
+        body.innerHTML = html; lucide.createIcons({ root: body });
+    }
+
+    let currentLinkingFlowId = null;
+    function setupLinkModal() {
+        const modal = document.getElementById('link-modal'); const content = document.getElementById('link-modal-content');
+        const close = () => { modal.classList.add('opacity-0'); content.classList.add('scale-95'); setTimeout(() => { modal.classList.add('hidden'); currentLinkingFlowId = null; }, 200); };
+        document.getElementById('btn-close-link-modal').addEventListener('click', close); modal.addEventListener('click', (e) => { if(e.target === modal) close(); });
+        document.getElementById('link-search').addEventListener('input', (e) => renderLinkTree(e.target.value.toLowerCase()));
+    }
+    function openLinkModal(sourceFlowId) {
+        currentLinkingFlowId = sourceFlowId; document.getElementById('link-search').value = ''; renderLinkTree('');
+        const modal = document.getElementById('link-modal'); const content = document.getElementById('link-modal-content');
+        modal.classList.remove('hidden'); setTimeout(() => { modal.classList.remove('opacity-0'); content.classList.remove('scale-95'); }, 10);
+    }
+    function renderLinkTree(searchQuery = '') {
+        const container = document.getElementById('link-tree-container'); let html = ''; let hasResults = false;
+        const sourceNode = findFlowById(currentLinkingFlowId); if (!sourceNode || sourceNode.type !== 'S') return;
+        const linkedIds = sourceNode.flow.manual.linkedFlows || [];
+        state.flows.forEach(l => {
+            let lHtml = ''; let hasLMatch = false;
+            l.children.forEach(m => {
+                let mHtml = ''; let hasMMatch = false;
+                m.children.forEach(s => {
+                    if (s.id === currentLinkingFlowId) return;
+                    const isMatch = s.name.toLowerCase().includes(searchQuery) || m.name.toLowerCase().includes(searchQuery) || l.name.toLowerCase().includes(searchQuery);
+                    if (searchQuery && !isMatch) return;
+                    hasMMatch = true; const isAlreadyLinked = linkedIds.includes(s.id);
+                    mHtml += `<div class="flex items-center justify-between p-2 pl-6 hover:bg-slate-50 border-t border-slate-100"><div class="text-xs flex flex-col"><span class="text-slate-700">${escapeHTML(s.name)}</span></div><button class="btn-select-link text-[10px] px-2 py-1 rounded font-bold ${isAlreadyLinked ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200'}" data-id="${s.id}" ${isAlreadyLinked ? 'disabled' : ''}>${isAlreadyLinked ? '追加済' : '追加'}</button></div>`;
+                });
+                if (hasMMatch) { hasLMatch = true; lHtml += `<div class="bg-slate-50 border-t border-slate-200"><div class="px-3 py-1.5 text-xs font-bold text-slate-600 flex items-center gap-1"><i data-lucide="folder" class="w-3 h-3"></i> ${escapeHTML(m.name)}</div>${mHtml}</div>`; }
+            });
+            if (hasLMatch) { hasResults = true; html += `<div class="border border-slate-200 rounded mb-2 overflow-hidden"><div class="bg-slate-100 px-3 py-2 text-xs font-bold text-slate-800 flex items-center gap-1"><i data-lucide="layers" class="w-3 h-3"></i> ${escapeHTML(l.name)}</div>${lHtml}</div>`; }
+        });
+        if (!hasResults) html = `<div class="text-center py-8 text-sm text-slate-500">選択できるフローが見つかりません</div>`;
+        container.innerHTML = html; lucide.createIcons({ root: container });
+        container.querySelectorAll('.btn-select-link').forEach(btn => btn.addEventListener('click', (e) => {
+            const targetId = e.currentTarget.dataset.id; const sourceFlow = findFlowById(currentLinkingFlowId).flow;
+            if (!sourceFlow.manual.linkedFlows.includes(targetId)) { sourceFlow.manual.linkedFlows.push(targetId); renderManualPanel(); updatePreview(); markDirty(); }
+            document.getElementById('btn-close-link-modal').click();
+        }));
+    }
+
+    async function exportZipProject() {
+        showLoading('ZIPファイルを作成中...');
+        try {
+            const zip = new window.JSZip();
+            zip.file('manifest.json', JSON.stringify({ version: '2.0.0', app: 'Flow Generator', exportedAt: new Date().toISOString(), projectId: state.meta.projectId, title: state.meta.title, flowsCount: state.flows.length }, null, 2));
+            zip.file('flows.json', JSON.stringify(state, null, 2));
+            const attFolder = zip.folder('attachments');
+            const attachments = await StorageManager.getAttachmentsByProject(state.meta.projectId);
+            for (const att of attachments) { if (att.blob) attFolder.file(att.id, att.blob); }
+            const content = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+            const a = document.createElement('a'); a.href = URL.createObjectURL(content); a.download = `${getSafeFilename(state.meta.title, getTimestamp())}.zip`; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        } catch (e) { alert('ZIPエクスポートに失敗しました。'); console.error(e); } finally { hideLoading(); }
+    }
+
+    async function importZipProject(file) {
+        if (!confirm('このZIPを読み込むと、現在編集中のプロジェクトは上書きされます。\n（※必要に応じて現在の状態をZIPエクスポートしてバックアップしてください）\n\n本当に読み込んでよろしいですか？')) { document.getElementById('zip-upload-input').value = ''; return; }
+        showLoading('ZIPファイルを展開中...');
+        try {
+            const zip = await window.JSZip.loadAsync(file); const flowsFile = zip.file('flows.json');
+            if (!flowsFile) throw new Error('無効なファイル形式です（flows.jsonがありません）。');
+            const importedState = JSON.parse(await flowsFile.async('string'));
+            if (!importedState.meta || !importedState.flows) throw new Error('不正なプロジェクト形式です（必須データが欠損しています）。');
+            const newProjectId = `proj_${Date.now().toString(36)}`; importedState.meta.projectId = newProjectId;
+            const attFolder = zip.folder('attachments'); let missingAttachments = 0;
+            if (attFolder) {
+                for (let l of importedState.flows) {
+                    for (let m of l.children) {
+                        for (let s of m.children) {
+                            if (s.manual && s.manual.steps) {
+                                for (let step of s.manual.steps) {
+                                    if (step.attachments) {
+                                        for (let att of step.attachments) {
+                                            const oldId = att.id; att.id = genId('att'); att.projectId = newProjectId;
+                                            const fileObj = attFolder.file(oldId);
+                                            if (fileObj) { const blob = await fileObj.async('blob'); await StorageManager.saveAttachment(att, blob); } 
+                                            else { console.warn(`[警告] 添付ファイル実体が見つかりません: ${att.filename}`); missingAttachments++; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            state = importedState; renderFull(); markDirty();
+            if (missingAttachments > 0) setTimeout(() => alert(`プロジェクトは読み込まれましたが、一部の添付ファイル（${missingAttachments}件）の実体データがZIP内に見つかりませんでした。`), 500);
+        } catch (e) { alert('ZIPの読み込みに失敗しました。\n' + e.message); console.error(e); } finally { hideLoading(); document.getElementById('zip-upload-input').value = ''; }
+    }
+
+    function setupGlobalEventListeners() {
+        document.getElementById('btn-close-manual').addEventListener('click', closeManualPanel);
+        document.addEventListener('keydown', async (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+            if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
+
+            const viewer = document.getElementById('image-viewer');
+            if (e.key === 'Escape') {
+                if (!viewer.classList.contains('hidden')) document.getElementById('btn-close-viewer').click();
+                else if (!document.getElementById('link-modal').classList.contains('hidden')) document.getElementById('btn-close-link-modal').click();
+                else if (currentManualPath) closeManualPanel();
+            }
+
+            if (!viewer.classList.contains('hidden')) {
+                if (e.key === 'ArrowLeft') { e.preventDefault(); document.getElementById('btn-viewer-prev-step').click(); return; }
+                if (e.key === 'ArrowRight') { e.preventDefault(); document.getElementById('btn-viewer-next-step').click(); return; }
+            }
+
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                const tooltip = document.getElementById('manual-tooltip');
+                if (tooltip.classList.contains('visible') && tooltip.querySelector('.carousel-slide')) {
+                    const stepCount = tooltip.querySelectorAll('.carousel-slide').length;
+                    if (stepCount > 1) { e.preventDefault(); moveTooltipCarouselLocal(e.key === 'ArrowLeft' ? -1 : 1, stepCount); }
+                }
+            }
+        });
+        
+        document.getElementById('btn-zoom-in').addEventListener('click', () => adjustZoom(0.1));
+        document.getElementById('btn-zoom-out').addEventListener('click', () => adjustZoom(-0.1));
+        document.getElementById('btn-open-newtab').addEventListener('click', () => {
+            const htmlCopy = document.documentElement.cloneNode(true);
+            htmlCopy.querySelectorAll('script').forEach(s => { if (s.textContent.includes('INJECTED_DATA_START')) s.textContent = s.textContent.replace(/\/\*\s*INJECTED_DATA_START\s*\*\/[\s\S]*?\/\*\s*INJECTED_DATA_END\s*\*\//, `/* INJECTED_DATA_START */\n    const EMBEDDED_DATA = ${JSON.stringify(state, null, 4)};\n    /* INJECTED_DATA_END */`); });
+            htmlCopy.querySelectorAll('svg[data-lucide]').forEach(svg => { const i = document.createElement('i'); i.setAttribute('data-lucide', svg.getAttribute('data-lucide')); const c = Array.from(svg.classList).filter(x => !x.startsWith('lucide')); if(c.length > 0) i.setAttribute('class', c.join(' ')); svg.parentNode.replaceChild(i, svg); });
+            htmlCopy.querySelectorAll('.pdf-page, .page-inner, .capture-area-container').forEach(el => el.removeAttribute('style')); htmlCopy.querySelector('#form-container').innerHTML = ''; htmlCopy.querySelector('#manual-panel').classList.add('translate-x-full'); htmlCopy.querySelector('#manual-panel-body').innerHTML = '';
+            window.open(URL.createObjectURL(new Blob(['<!DOCTYPE html>\n' + htmlCopy.outerHTML], { type: 'text/html;charset=utf-8' })), '_blank');
+        });
+
+        document.getElementById('btn-export-md').addEventListener('click', () => {
+            let md = `# ${state.meta.title}\ndate: ${state.meta.date}\nauthor: ${state.meta.author || ''}\n\n`;
+            state.flows.forEach(l => { md += `## ${l.name}${l.isBottleneck ? ' [ボトルネック]' : ''}\n`; l.children.forEach(m => { md += `### ${m.name}${m.isBottleneck ? ' [ボトルネック]' : ''}\n`; m.children.forEach(s => { md += `- ${s.name}${s.isBottleneck ? ' [ボトルネック]' : ''}\n`; if (s.manual && (s.manual.summary || s.manual.steps.length > 0 || s.manual.notes || s.manual.linkedFlows.length > 0)) { if (s.manual.summary) md += `  > ${s.manual.summary.replace(/\n/g, '  \n  > ')}\n`; s.manual.steps.forEach((step, idx) => { md += `  ${idx + 1}. ${step.title}\n`; if(step.description) md += `     ${step.description.replace(/\n/g, '\n     ')}\n`; }); if (s.manual.notes || s.manual.linkedFlows.length > 0) { md += `  ---\n`; if (s.manual.notes) md += `  備考: ${s.manual.notes.replace(/\n/g, '  \n  ')}\n`; s.manual.linkedFlows.forEach(linkId => { const tgt = findFlowById(linkId); if(tgt) md += `  🔗 -> [${tgt.flow.name}](${tgt.flow.id})\n`; }); } } }); }); md += `\n`; });
+            const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([md], { type: 'text/markdown;charset=utf-8' })); a.download = `${getSafeFilename(state.meta.title, getTimestamp())}.md`; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        });
+
+        const mdUpload = document.getElementById('md-upload-input');
+        document.getElementById('btn-import-md').addEventListener('click', () => mdUpload.click());
+
+        mdUpload.addEventListener('change', (e) => {
+            if (!e.target.files[0]) return;
+            const reader = new FileReader();
+            reader.onload = function(ev) {
+                try {
+                    const markdownText = ev.target.result; const result = parseRichMarkdownToState(markdownText);
+                    if (!result.state.flows || result.state.flows.length === 0) { alert("有効な構造が見つかりません。"); mdUpload.value = ''; return; }
+                    state = result.state; renderFull(); markDirty();
+                    const messages = [];
+                    if (result.warnings.length > 0) messages.push(`- 解釈できなかった行: ${result.warnings.length}件`);
+                    if (result.unresolvedLinks.length > 0) messages.push(`- 未解決の関連リンク: ${result.unresolvedLinks.length}件`);
+                    if (messages.length > 0) setTimeout(() => { alert(`MDは読み込まれましたが、一部注意事項があります。\n\n${messages.join('\n')}`); }, 100);
+                } catch (err) { console.error(err); alert('MDの読み込みに失敗しました。\n' + (err.message || err)); } finally { mdUpload.value = ''; }
+            };
+            reader.readAsText(e.target.files[0]);
+        });
+
+        document.getElementById('btn-export-zip').addEventListener('click', exportZipProject);
+        const zipUpload = document.getElementById('zip-upload-input');
+        document.getElementById('btn-import-zip').addEventListener('click', () => zipUpload.click());
+        zipUpload.addEventListener('change', (e) => { if (e.target.files[0]) importZipProject(e.target.files[0]); });
+
+        document.getElementById('btn-save-pdf').addEventListener('click', async (e) => {
+            const btn = e.currentTarget; const originalHtml = btn.innerHTML;
+            try {
+                btn.disabled = true; btn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> 生成中...'; showLoading('PDF生成中...'); document.getElementById('preview-container').style.overflow = 'hidden';
+                const pdf = new window.jspdf.jsPDF('l', 'mm', 'a4'); if (document.fonts && document.fonts.ready) await document.fonts.ready; await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                const pages = Array.from(document.getElementById('preview-wrapper').querySelectorAll('.capture-area-container'));
+                for (let i = 0; i < pages.length; i++) {
+                    document.getElementById('pdf-progress').textContent = `${i + 1} / ${pages.length}`;
+                    const container = pages[i]; const pageEl = container.querySelector('.pdf-page'); const [oTrans, oW, oH] = [pageEl.style.transform, container.style.width, container.style.height];
+                    pageEl.style.transition = 'none'; pageEl.style.transform = 'scale(1)'; container.style.width = PAGE_SIZES.w + 'px'; container.style.height = PAGE_SIZES.h + 'px';
+                    const canvas = await htmlToImage.toCanvas(pageEl, { pixelRatio: 2, width: PAGE_SIZES.w, height: PAGE_SIZES.h, style: { transform: 'none', transformOrigin: 'top left' } });
+                    pageEl.style.transition = ''; pageEl.style.transform = oTrans; container.style.width = oW; container.style.height = oH;
+                    if (i > 0) pdf.addPage(); pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, PAGE_SIZES.mmW, PAGE_SIZES.mmH);
+                }
+                const ts = getTimestamp(); const pdfLink = document.createElement('a'); pdfLink.href = URL.createObjectURL(pdf.output('blob')); pdfLink.download = `${getSafeFilename(state.meta.title, ts)}.pdf`; document.body.appendChild(pdfLink); pdfLink.click(); document.body.removeChild(pdfLink); 
+            } catch (err) { 
+                console.error('[PDF Export Error]', err); 
+                alert('PDF生成に失敗しました。'); 
+            } finally { 
+                btn.disabled = false; btn.innerHTML = originalHtml; hideLoading(); document.getElementById('preview-container').style.overflow = ''; adjustZoom(0); 
+            }
+        });
+    }
+
+    function setupResizeHandle() {
+        const handle = document.getElementById('resize-handle'); 
+        const leftPane = document.getElementById('left-pane'); 
+        let isResizing = false;
+
+        const startResize = () => { isResizing = true; document.body.style.cursor = 'col-resize'; };
+        const stopResize = () => { isResizing = false; document.body.style.cursor = ''; };
+        const doResize = (clientX) => {
+            if (isResizing) { 
+                leftPane.style.width = Math.max(380, Math.min(clientX, window.innerWidth * 0.7)) + 'px'; 
+                adjustZoom(0); hideManualTooltip(); 
+            }
+        };
+
+        handle.addEventListener('mousedown', startResize);
+        handle.addEventListener('touchstart', startResize, { passive: true });
+
+        window.addEventListener('mousemove', (e) => doResize(e.clientX));
+        window.addEventListener('touchmove', (e) => doResize(e.touches[0].clientX), { passive: true });
+
+        window.addEventListener('mouseup', stopResize);
+        window.addEventListener('touchend', stopResize);
+    }
+
+    function autoAdjustDensity() {
+        document.getElementById('preview-wrapper').querySelectorAll('.page-inner').forEach(inner => {
+            inner.style.transform = 'none'; inner.style.width = '100%'; inner.style.marginLeft = '0';
+            const page = inner.closest('.pdf-page'); const safeH = page.clientHeight - 60; const safeW = page.clientWidth - 70;
+            inner.style.height = 'auto';
+            let scaleX = inner.scrollWidth > safeW ? safeW / inner.scrollWidth : 1; let scaleY = inner.scrollHeight > safeH ? safeH / inner.scrollHeight : 1; let scale = Math.min(scaleX, scaleY);
+            if (scale < 0.99) {
+                scale = Math.max(0.4, scale - 0.01); inner.style.transformOrigin = 'top center'; inner.style.transform = `scale(${scale})`; inner.style.width = `${100 / scale}%`;
+                const diffW = (page.clientWidth * (1 / scale)) - page.clientWidth; inner.style.marginLeft = `-${diffW / 2}px`;
+            }
+            inner.style.height = '';
+        });
+    }
+
+    function adjustZoom(delta) {
+        if (!document.getElementById('preview-container')) return;
+        let targetScale = currentScale;
+        if (delta === 0) targetScale = Math.max(0.1, Math.min((document.getElementById('preview-container').clientWidth - 20) / PAGE_SIZES.w, (document.getElementById('preview-container').clientHeight - 40) / PAGE_SIZES.h, 1.0));
+        else targetScale += delta;
+        targetScale = Math.max(0.2, Math.min(targetScale, 2.0));
+        document.getElementById('preview-wrapper').querySelectorAll('.capture-area-container').forEach(c => { c.querySelector('.pdf-page').style.transform = `scale(${targetScale})`; c.style.width = (PAGE_SIZES.w * targetScale) + 'px'; c.style.height = (PAGE_SIZES.h * targetScale) + 'px'; });
+        currentScale = targetScale; document.getElementById('zoom-level').textContent = Math.round(currentScale * 100) + '%';
+    }
+
+    window.addEventListener('DOMContentLoaded', init);
+})();
+</script>
+</body>
+</html>
